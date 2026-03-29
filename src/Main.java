@@ -1,17 +1,10 @@
 import GUI.LoginScreen;
-import javax.swing.*;
+import GUI.Theme;
+import javax.swing.SwingUtilities;
 
 public class Main {
     public static void main(String[] args) {
-        // Anti-aliasing
-        System.setProperty("awt.useSystemAAFontSettings", "on");
-        System.setProperty("swing.aatext", "true");
-
-        // Use system LAF — Nimbus breaks custom text fields
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception ignored) {}
-
+        Theme.apply();  // sets system LAF only, no Nimbus
         SwingUtilities.invokeLater(() -> new LoginScreen().setVisible(true));
     }
 }
