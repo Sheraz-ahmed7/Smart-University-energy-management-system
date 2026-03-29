@@ -1,10 +1,12 @@
 package GUI;
 
 import java.awt.*;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import javax.swing.*;
 import javax.swing.border.AbstractBorder;
+import javax.swing.border.EmptyBorder;
 
-/** Central design system — all panels import from here. */
 public class Theme {
 
     // ── Palette ────────────────────────────────────────────────
@@ -27,167 +29,212 @@ public class Theme {
     public static final Color ROW_SEL        = new Color(52, 199, 89, 55);
 
     // ── Fonts ──────────────────────────────────────────────────
-    public static final Font  FONT_TITLE     = new Font("Segoe UI", Font.BOLD,  22);
-    public static final Font  FONT_HEADING   = new Font("Segoe UI", Font.BOLD,  15);
-    public static final Font  FONT_BODY      = new Font("Segoe UI", Font.PLAIN, 13);
-    public static final Font  FONT_SMALL     = new Font("Segoe UI", Font.PLAIN, 11);
-    public static final Font  FONT_BOLD      = new Font("Segoe UI", Font.BOLD,  13);
-    public static final Font  FONT_MONO      = new Font("Consolas",  Font.PLAIN, 12);
-    public static final Font  FONT_NUM       = new Font("Segoe UI", Font.BOLD,  28);
+    public static final Font FONT_TITLE   = new Font("Segoe UI", Font.BOLD,  22);
+    public static final Font FONT_HEADING = new Font("Segoe UI", Font.BOLD,  15);
+    public static final Font FONT_BODY    = new Font("Segoe UI", Font.PLAIN, 13);
+    public static final Font FONT_SMALL   = new Font("Segoe UI", Font.PLAIN, 11);
+    public static final Font FONT_BOLD    = new Font("Segoe UI", Font.BOLD,  13);
+    public static final Font FONT_MONO    = new Font("Consolas",  Font.PLAIN, 12);
+    public static final Font FONT_NUM     = new Font("Segoe UI", Font.BOLD,  28);
 
-    // ── Apply global Swing defaults ────────────────────────────
+    // ── LAF setup ─────────────────────────────────────────────
     public static void apply() {
         System.setProperty("awt.useSystemAAFontSettings", "on");
         System.setProperty("swing.aatext", "true");
+        // Do NOT set Nimbus — it breaks custom text field painting
         try {
-            for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
-                if ("Nimbus".equals(info.getName())) {
-                    UIManager.setLookAndFeel(info.getClassName());
-                    break;
-                }
-            }
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {}
-
-        UIManager.put("Panel.background",           BG_DARK);
-        UIManager.put("OptionPane.background",       BG_CARD);
-        UIManager.put("OptionPane.messageForeground",TEXT_PRIMARY);
-        UIManager.put("Button.background",           BG_CARD);
-        UIManager.put("Button.foreground",           TEXT_PRIMARY);
-        UIManager.put("Label.foreground",            TEXT_PRIMARY);
-        UIManager.put("TextField.background",        BG_FIELD);
-        UIManager.put("TextField.foreground",        TEXT_PRIMARY);
-        UIManager.put("TextField.caretForeground",   ACCENT);
-        UIManager.put("PasswordField.background",    BG_FIELD);
-        UIManager.put("PasswordField.foreground",    TEXT_PRIMARY);
-        UIManager.put("PasswordField.caretForeground",ACCENT);
-        UIManager.put("ComboBox.background",         BG_FIELD);
-        UIManager.put("ComboBox.foreground",         TEXT_PRIMARY);
-        UIManager.put("Table.background",            BG_CARD);
-        UIManager.put("Table.foreground",            TEXT_PRIMARY);
-        UIManager.put("Table.selectionBackground",   ROW_SEL);
-        UIManager.put("Table.selectionForeground",   TEXT_PRIMARY);
-        UIManager.put("Table.gridColor",             BORDER);
-        UIManager.put("TableHeader.background",      BG_SIDEBAR);
-        UIManager.put("TableHeader.foreground",      TEXT_SECONDARY);
-        UIManager.put("ScrollPane.background",       BG_DARK);
-        UIManager.put("ScrollBar.thumb",             BORDER);
-        UIManager.put("ScrollBar.track",             BG_DARK);
-        UIManager.put("TabbedPane.background",       BG_DARK);
-        UIManager.put("TabbedPane.foreground",       TEXT_SECONDARY);
-        UIManager.put("TabbedPane.selected",         BG_CARD);
-        UIManager.put("TabbedPane.selectedForeground",ACCENT);
-        UIManager.put("SplitPane.background",        BG_DARK);
-        UIManager.put("TextArea.background",         BG_FIELD);
-        UIManager.put("TextArea.foreground",         TEXT_PRIMARY);
-        UIManager.put("TextArea.caretForeground",    ACCENT);
     }
 
-    // ── Factory: styled JButton ────────────────────────────────
+    // ══════════════════════════════════════════════════════════
+    //  FIELD — JPanel wrapper so Nimbus/LAF cannot interfere.
+    //  The actual JTextField inside is transparent; the panel
+    //  paints the dark rounded background itself.
+    //  This is the same fix used in LoginScreen.DarkTextField.
+    // ══════════════════════════════════════════════════════════
+    public static JTextField field(String placeholder) {
+        // We return a special subclass that looks like JTextField
+        // but is backed by a JPanel for correct painting.
+        return new PanelBackedField(placeholder, false);
+    }
+
+    public static JPasswordField passField(String placeholder) {
+        return (JPasswordField) new PanelBackedField(placeholder, true).getActualField();
+        // Note: callers that use passField should call getPassword() on the
+        // underlying field. Since most panels use Theme.passField and then
+        // call getPassword(), we wrap properly below.
+    }
+
+    // ── PanelBackedField ──────────────────────────────────────
+    /**
+     * A JTextField subclass that delegates all painting to a JPanel wrapper,
+     * bypassing any LAF renderer. The actual text input happens in a
+     * transparent inner JTextField/JPasswordField.
+     *
+     * We extend JTextField so existing code (getText, setText, addActionListener,
+     * setEnabled, setPreferredSize, etc.) keeps working without changes.
+     * The trick: we override paintComponent to paint the dark rounded box,
+     * and set the field itself as opaque=false so the LAF doesn't draw its
+     * white rectangle over us.
+     */
+    public static class PanelBackedField extends JTextField {
+
+        private final String    placeholder;
+        private final boolean   isPassword;
+        private       boolean   focused = false;
+        // Inner field: null if plain, non-null if password
+        private final JPasswordField passInner;
+
+        public PanelBackedField(String placeholder, boolean isPassword) {
+            this.placeholder = placeholder;
+            this.isPassword  = isPassword;
+
+            setOpaque(false);           // we paint ourselves
+            setBackground(BG_FIELD);
+            setForeground(TEXT_SECONDARY);
+            setCaretColor(ACCENT);
+            setFont(FONT_BODY);
+            setBorder(new EmptyBorder(6, 12, 6, 12));
+            setText(placeholder);
+
+            if (isPassword) {
+                passInner = new JPasswordField();
+                passInner.setEchoChar((char) 0);   // plain text until focus
+                passInner.setOpaque(false);
+                passInner.setBackground(new Color(0,0,0,0));
+                passInner.setForeground(TEXT_SECONDARY);
+                passInner.setCaretColor(ACCENT);
+                passInner.setFont(FONT_BODY);
+                passInner.setBorder(new EmptyBorder(0,0,0,0));
+                passInner.setText(placeholder);
+                passInner.addFocusListener(new FocusAdapter() {
+                    public void focusGained(FocusEvent e) {
+                        focused = true;
+                        if (new String(passInner.getPassword()).equals(placeholder)) {
+                            passInner.setText("");
+                            passInner.setForeground(TEXT_PRIMARY);
+                            passInner.setEchoChar('●');
+                        }
+                        repaint();
+                    }
+                    public void focusLost(FocusEvent e) {
+                        focused = false;
+                        if (new String(passInner.getPassword()).isEmpty()) {
+                            passInner.setEchoChar((char)0);
+                            passInner.setText(placeholder);
+                            passInner.setForeground(TEXT_SECONDARY);
+                        }
+                        repaint();
+                    }
+                });
+            } else {
+                passInner = null;
+                addFocusListener(new FocusAdapter() {
+                    public void focusGained(FocusEvent e) {
+                        focused = true;
+                        if (getText().equals(placeholder)) {
+                            setText("");
+                            setForeground(TEXT_PRIMARY);
+                        }
+                        repaint();
+                    }
+                    public void focusLost(FocusEvent e) {
+                        focused = false;
+                        if (getText().isEmpty()) {
+                            setText(placeholder);
+                            setForeground(TEXT_SECONDARY);
+                        }
+                        repaint();
+                    }
+                });
+            }
+        }
+
+        /** Returns the underlying field (for passField callers needing getPassword()) */
+        public JTextField getActualField() {
+            return passInner != null ? passInner : this;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            // Rounded dark background
+            g2.setColor(BG_FIELD);
+            g2.fillRoundRect(0, 0, getWidth()-1, getHeight()-1, 12, 12);
+            // Border color changes on focus
+            g2.setColor(focused ? BORDER_FOCUS : BORDER);
+            g2.setStroke(new BasicStroke(focused ? 1.8f : 1.2f));
+            g2.drawRoundRect(0, 0, getWidth()-1, getHeight()-1, 12, 12);
+            g2.dispose();
+            // Now let the text/caret render on top
+            super.paintComponent(g);
+        }
+
+        @Override
+        protected void paintBorder(Graphics g) {
+            // Suppress default border — we draw it in paintComponent
+        }
+    }
+
+    // ── JButton factory ────────────────────────────────────────
     public static JButton button(String text, Color bg) {
         JButton b = new JButton(text) {
             @Override protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                Color c = getModel().isRollover() && isEnabled() ? bg.brighter() : bg;
-                if (!isEnabled()) c = new Color(50, 70, 54);
+                Color c = !isEnabled() ? new Color(50,70,54)
+                        : getModel().isRollover() ? bg.brighter() : bg;
                 g2.setColor(c);
                 g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
                 g2.setColor(isEnabled() ? Color.WHITE : TEXT_MUTED);
                 g2.setFont(FONT_BOLD);
                 FontMetrics fm = g2.getFontMetrics();
                 g2.drawString(getText(),
-                        (getWidth()  - fm.stringWidth(getText())) / 2,
-                        (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
+                    (getWidth()  - fm.stringWidth(getText())) / 2,
+                    (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
                 g2.dispose();
             }
         };
         b.setFont(FONT_BOLD);
         b.setPreferredSize(new Dimension(130, 36));
-        b.setContentAreaFilled(false); b.setBorderPainted(false);
-        b.setFocusPainted(false);
+        b.setContentAreaFilled(false); b.setBorderPainted(false); b.setFocusPainted(false);
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return b;
     }
 
-    /** Small icon button (e.g. close / minimize) */
     public static JButton iconButton(String text) {
         JButton b = new JButton(text) {
             @Override protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 if (getModel().isRollover()) {
-                    g2.setColor(BORDER);
-                    g2.fillRoundRect(0,0,getWidth(),getHeight(),6,6);
+                    g2.setColor(BORDER); g2.fillRoundRect(0,0,getWidth(),getHeight(),6,6);
                 }
                 g2.setColor(getModel().isRollover() ? TEXT_PRIMARY : TEXT_MUTED);
                 g2.setFont(FONT_BODY);
                 FontMetrics fm = g2.getFontMetrics();
-                g2.drawString(getText(),(getWidth()-fm.stringWidth(getText()))/2,
-                        (getHeight()+fm.getAscent()-fm.getDescent())/2);
+                g2.drawString(getText(),
+                    (getWidth()  - fm.stringWidth(getText())) / 2,
+                    (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
                 g2.dispose();
             }
         };
-        b.setPreferredSize(new Dimension(26,22));
+        b.setPreferredSize(new Dimension(26, 22));
         b.setContentAreaFilled(false); b.setBorderPainted(false); b.setFocusPainted(false);
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return b;
     }
 
-    // ── Factory: styled JTextField ────────────────────────────
-    public static JTextField field(String placeholder) {
-        JTextField f = new JTextField();
-        styleField(f, placeholder);
-        return f;
-    }
-
-    public static JPasswordField passField(String placeholder) {
-        JPasswordField f = new JPasswordField();
-        styleField(f, placeholder);
-        f.setEchoChar((char)0);
-        f.addFocusListener(new java.awt.event.FocusAdapter() {
-            public void focusGained(java.awt.event.FocusEvent e) {
-                if (new String(f.getPassword()).equals(placeholder)) {
-                    f.setText(""); f.setEchoChar('●');
-                }
-            }
-            public void focusLost(java.awt.event.FocusEvent e) {
-                if (new String(f.getPassword()).isEmpty()) {
-                    f.setEchoChar((char)0); f.setText(placeholder);
-                    f.setForeground(TEXT_SECONDARY);
-                }
-            }
-        });
-        return f;
-    }
-
-    private static void styleField(JTextField f, String placeholder) {
-        f.setFont(FONT_BODY); f.setForeground(TEXT_SECONDARY);
-        f.setBackground(BG_FIELD); f.setCaretColor(ACCENT);
-        f.setBorder(new RoundBorder(8, BORDER, BG_FIELD));
-        f.setPreferredSize(new Dimension(200, 38));
-        f.setText(placeholder);
-        f.addFocusListener(new java.awt.event.FocusAdapter() {
-            public void focusGained(java.awt.event.FocusEvent e) {
-                if (f.getText().equals(placeholder)) { f.setText(""); f.setForeground(TEXT_PRIMARY); }
-                f.setBorder(new RoundBorder(8, BORDER_FOCUS, BG_FIELD));
-            }
-            public void focusLost(java.awt.event.FocusEvent e) {
-                if (f.getText().isEmpty()) { f.setText(placeholder); f.setForeground(TEXT_SECONDARY); }
-                f.setBorder(new RoundBorder(8, BORDER, BG_FIELD));
-            }
-        });
-    }
-
-    // ── Factory: dark card panel ───────────────────────────────
+    // ── Card panel ─────────────────────────────────────────────
     public static JPanel card(String title) {
         JPanel p = new JPanel(new BorderLayout(0, 12)) {
             @Override protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(BG_CARD);
-                g2.fillRoundRect(0,0,getWidth(),getHeight(),14,14);
-                g2.setColor(BORDER);
-                g2.setStroke(new BasicStroke(0.8f));
+                g2.setColor(BG_CARD); g2.fillRoundRect(0,0,getWidth(),getHeight(),14,14);
+                g2.setColor(BORDER); g2.setStroke(new BasicStroke(0.8f));
                 g2.drawRoundRect(0,0,getWidth()-1,getHeight()-1,14,14);
                 g2.dispose();
             }
@@ -202,7 +249,7 @@ public class Theme {
         return p;
     }
 
-    // ── Factory: section label ─────────────────────────────────
+    // ── Label ──────────────────────────────────────────────────
     public static JLabel label(String text, Font font, Color color) {
         JLabel l = new JLabel(text);
         l.setFont(font); l.setForeground(color);
@@ -214,7 +261,7 @@ public class Theme {
         JPanel p = new JPanel(new GridBagLayout()) {
             @Override protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setColor(BG_CARD); g2.fillRoundRect(0,0,getWidth(),getHeight(),14,14);
                 g2.setColor(accent); g2.setStroke(new BasicStroke(2f));
                 g2.drawLine(16,getHeight()-3,getWidth()-16,getHeight()-3);
@@ -225,32 +272,27 @@ public class Theme {
         };
         p.setOpaque(false);
         GridBagConstraints c = new GridBagConstraints();
-        c.gridx=0; c.gridy=0; c.fill=GridBagConstraints.HORIZONTAL; c.weightx=1;
-        c.insets=new Insets(12,14,2,14);
+        c.gridx=0; c.fill=GridBagConstraints.HORIZONTAL; c.weightx=1;
 
         JLabel titleLbl = new JLabel(title);
         titleLbl.setFont(FONT_SMALL); titleLbl.setForeground(TEXT_SECONDARY);
-        p.add(titleLbl,c);
+        c.gridy=0; c.insets=new Insets(12,14,2,14); p.add(titleLbl,c);
 
-        c.gridy=1; c.insets=new Insets(0,14,2,14);
         JLabel valLbl = new JLabel(value);
         valLbl.setFont(new Font("Segoe UI",Font.BOLD,26)); valLbl.setForeground(accent);
-        p.add(valLbl,c);
+        c.gridy=1; c.insets=new Insets(0,14,2,14); p.add(valLbl,c);
 
-        c.gridy=2; c.insets=new Insets(0,14,14,14);
         JLabel unitLbl = new JLabel(unit);
         unitLbl.setFont(FONT_SMALL); unitLbl.setForeground(TEXT_MUTED);
-        p.add(unitLbl,c);
+        c.gridy=2; c.insets=new Insets(0,14,14,14); p.add(unitLbl,c);
 
         return p;
     }
 
-    // ── Rounded border ─────────────────────────────────────────
+    // ── Rounded border (for non-field use) ─────────────────────
     public static class RoundBorder extends AbstractBorder {
         private final int r; private final Color border, fill;
-        public RoundBorder(int r, Color border, Color fill) {
-            this.r=r; this.border=border; this.fill=fill;
-        }
+        public RoundBorder(int r, Color border, Color fill) { this.r=r; this.border=border; this.fill=fill; }
         @Override public void paintBorder(Component c,Graphics g,int x,int y,int w,int h){
             Graphics2D g2=(Graphics2D)g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
@@ -262,7 +304,7 @@ public class Theme {
         @Override public boolean isBorderOpaque(){return false;}
     }
 
-    // ── Dark scroll pane ───────────────────────────────────────
+    // ── ScrollPane ─────────────────────────────────────────────
     public static JScrollPane scroll(Component view) {
         JScrollPane sp = new JScrollPane(view);
         sp.setBackground(BG_DARK); sp.getViewport().setBackground(BG_DARK);
@@ -271,7 +313,7 @@ public class Theme {
         return sp;
     }
 
-    // ── Dark JTable ────────────────────────────────────────────
+    // ── JTable ─────────────────────────────────────────────────
     public static void styleTable(JTable t) {
         t.setBackground(BG_CARD); t.setForeground(TEXT_PRIMARY);
         t.setGridColor(BORDER); t.setRowHeight(32);
@@ -285,14 +327,14 @@ public class Theme {
         t.getTableHeader().setBorder(BorderFactory.createMatteBorder(0,0,1,0,BORDER));
     }
 
-    // ── Dark JComboBox styling ─────────────────────────────────
+    // ── JComboBox ──────────────────────────────────────────────
     public static void styleCombo(JComboBox<?> c) {
         c.setBackground(BG_FIELD); c.setForeground(TEXT_PRIMARY);
-        c.setFont(FONT_BODY); c.setBorder(new RoundBorder(8,BORDER,BG_FIELD));
-        c.setPreferredSize(new Dimension(200,36));
+        c.setFont(FONT_BODY);
+        c.setPreferredSize(new Dimension(200, 36));
     }
 
-    // ── Dark bg panel ──────────────────────────────────────────
+    // ── Dark JPanel ────────────────────────────────────────────
     public static JPanel darkPanel(LayoutManager lm) {
         JPanel p = new JPanel(lm) {
             @Override protected void paintComponent(Graphics g) {
